@@ -265,6 +265,7 @@ const KEY = "rozgor:v1";
 const KEY_LEARN = "rozgor:learned";
 const KEY_LOG = "rozgor:pricelog";
 const KEY_HIST = "rozgor:history";
+const KEY_INBOX = "rozgor:inbox";
 const hasStore = typeof window !== "undefined" && window.storage;
 
 // narx xotirasi kaliti: nom + tur
@@ -387,6 +388,8 @@ function App() {
   const [reading, setReading] = useState(false);
   const [readMsg, setReadMsg] = useState("");
   const [openTrip, setOpenTrip] = useState(null);
+  const [inbox, setInbox] = useState([]);          // kelgan ro'yxatlar (har biri alohida savat)
+  const [openBasketId, setOpenBasketId] = useState(null);
   const [tripPhotos, setTripPhotos] = useState({});
   const photoRef = useRef(null);
   // ulashish / qabul qilish
@@ -424,6 +427,7 @@ function App() {
         try { const r = await window.storage.get(KEY_LEARN); if (active && r && r.value) setLearned(JSON.parse(r.value) || {}); } catch (e) {}
         try { const r = await window.storage.get(KEY_LOG); if (active && r && r.value) setPriceLog(JSON.parse(r.value) || {}); } catch (e) {}
         try { const r = await window.storage.get(KEY_HIST); if (active && r && r.value) setHistory(JSON.parse(r.value) || []); } catch (e) {}
+        try { const r = await window.storage.get(KEY_INBOX); if (active && r && r.value) setInbox(JSON.parse(r.value) || []); } catch (e) {}
         try {
           const r = await window.storage.get(KEY_ME);
           if (active && r && r.value) { setMe(JSON.parse(r.value)); }
@@ -444,6 +448,7 @@ function App() {
   useEffect(() => { if (loaded && hasStore) window.storage.set(KEY_LEARN, JSON.stringify(learned)).catch(() => {}); }, [learned, loaded]);
   useEffect(() => { if (loaded && hasStore) window.storage.set(KEY_LOG, JSON.stringify(priceLog)).catch(() => {}); }, [priceLog, loaded]);
   useEffect(() => { if (loaded && hasStore) window.storage.set(KEY_HIST, JSON.stringify(history)).catch(() => {}); }, [history, loaded]);
+  useEffect(() => { if (loaded && hasStore) window.storage.set(KEY_INBOX, JSON.stringify(inbox)).catch(() => {}); }, [inbox, loaded]);
   useEffect(() => { if (loaded && hasStore && me) window.storage.set(KEY_ME, JSON.stringify(me)).catch(() => {}); }, [me, loaded]);
 
   // ── kelgan ro'yxatlarni avtomatik tekshirish (telefon inbox) ──
@@ -784,11 +789,9 @@ function App() {
     try {
       const arr = decodeShare(pasteCode);
       if (!arr.length) { setRecvMsg("Ro‘yxat bo‘sh chiqdi."); return; }
-      const exists = new Set(items.map((i) => learnKey(i.name, i.variant)));
-      const add = arr.filter((i) => !exists.has(learnKey(i.name, i.variant)));
-      setItems((prev) => [...add, ...prev]);
-      const dup = arr.length - add.length;
-      setRecvMsg(`✓ ${add.length} ta mahsulot qo‘shildi` + (dup > 0 ? `, ${dup} tasi allaqachon bor edi.` : "."));
+      const basket = { id: Date.now(), fromName: "", fromPhone: "", date: Date.now(), read: false, items: arr };
+      setInbox((prev) => [basket, ...prev].slice(0, 40));
+      setRecvMsg(`✓ ${arr.length} ta mahsulotli ro‘yxat qabul qilindi.`);
       setPasteCode("");
       setView("list");
       setTimeout(() => { setReceiving(false); setRecvMsg(""); }, 1300);
@@ -816,25 +819,28 @@ function App() {
     setSending(false);
   }
 
-  // ── Kelgan ro'yxatlarni tekshirish ──
+  // ── Kelgan ro'yxatlarni tekshirish (har biri alohida savat) ──
   async function checkInbox(manual) {
     if (!me || !me.phone || !hasStore) { if (manual) flashIncoming("Avval telefon raqamingizni kiriting."); return; }
     try {
       const fresh = await net.getInbox(me.phone, lastSeenRef.current);
       if (fresh.length) {
-        const incomingItems = [];
-        fresh.forEach((m) => (m.items || []).forEach((o) => incomingItems.push(o)));
-        setItems((prev) => {
-          const exists = new Set(prev.map((i) => learnKey(i.name, i.variant)));
-          const add = [];
-          incomingItems.forEach((o) => { const k = learnKey(o.n, o.v); if (!exists.has(k)) { exists.add(k); add.push(unpackItem(o)); } });
-          return [...add, ...prev];
+        setInbox((prev) => {
+          const next = [...prev];
+          fresh.forEach((m) => {
+            next.unshift({
+              id: m.id, fromName: (m.fromName || "").trim(), fromPhone: m.fromPhone || "",
+              date: m.date || m.id, read: false,
+              items: (m.items || []).map(unpackItem),
+            });
+          });
+          return next.slice(0, 40);
         });
         const maxId = Math.max(...fresh.map((m) => Number(m.id)));
         lastSeenRef.current = maxId;
         if (hasStore) window.storage.set(KEY_SEEN, String(maxId)).catch(() => {});
-        const from = fresh[fresh.length - 1].fromName || "Do‘stingiz";
-        flashIncoming(`✓ ${from}dan ${incomingItems.length} ta mahsulot keldi`);
+        const from = (fresh[fresh.length - 1].fromName || "").trim() || "Do‘stingiz";
+        flashIncoming(`✓ Senga ${from}dan yangi ro‘yxat keldi`);
         setView("list");
       } else if (manual) {
         flashIncoming("Yangi ro‘yxat yo‘q.");
@@ -842,6 +848,28 @@ function App() {
     } catch (e) { if (manual) flashIncoming("Tekshirishda xatolik."); }
   }
   function flashIncoming(t) { setIncoming(t); setTimeout(() => setIncoming(""), 4000); }
+
+  // savat sarlavhasi va jo'natuvchi nomi
+  function senderLabel(b) {
+    if (b.fromName && b.fromName.trim()) return b.fromName.trim();
+    if (b.fromPhone) return "+998 " + b.fromPhone.replace(/^998/, "");
+    return "";
+  }
+  function basketTitle(b) {
+    const n = senderLabel(b);
+    return n ? `${n}dan bozor ro‘yxati` : "Kelgan bozor ro‘yxati";
+  }
+  function openBasket(b) {
+    setInbox((prev) => prev.map((x) => (x.id === b.id ? { ...x, read: true } : x)));
+    setOpenBasketId(b.id);
+  }
+  function toggleBasketItem(bid, iid) {
+    setInbox((prev) => prev.map((b) => (b.id === bid ? { ...b, items: b.items.map((it) => (it.id === iid ? { ...it, bought: !it.bought } : it)) } : b)));
+  }
+  function deleteBasket(bid) {
+    setInbox((prev) => prev.filter((b) => b.id !== bid));
+    setOpenBasketId(null);
+  }
 
   function completeOnboard() {
     const local = normPhone(obPhone);
@@ -892,6 +920,37 @@ function App() {
         </div>
 
         {view === "list" && (<>
+        {/* Kelgan ro'yxatlar — har biri alohida */}
+        {inbox.length > 0 && (
+          <div style={{ margin: "0 18px 14px" }}>
+            <SectionLabel text="Sizga kelgan ro‘yxatlar" count={inbox.length} color={C.gold} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
+              {inbox.map((b) => {
+                const total = b.items.length;
+                const left = b.items.filter((i) => !i.bought).length;
+                return (
+                  <button key={b.id} onClick={() => openBasket(b)}
+                    style={{ display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left", cursor: "pointer",
+                      background: b.read ? C.paper : "#FFF6E6", border: `1px solid ${b.read ? C.line : C.gold}`, borderRadius: 14, padding: "12px 13px", fontFamily: FONT }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 11, background: b.read ? C.bg : C.gold, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                      <ShoppingBasket size={19} color={b.read ? C.gold : "#fff"} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14.5, fontWeight: b.read ? 600 : 800, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        Senga {basketTitle(b)}
+                      </div>
+                      <div style={{ fontSize: 12, color: C.sub, marginTop: 2, fontWeight: b.read ? 400 : 600 }}>
+                        {total} ta mahsulot{left < total ? ` · ${left} ta qoldi` : ""}{b.read ? "" : " · yangi"}
+                      </div>
+                    </div>
+                    {!b.read && <span style={{ width: 9, height: 9, borderRadius: 999, background: C.pom, flexShrink: 0 }} />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Reja sanasi — bozorga qachon borasiz */}
         <div style={{ margin: "0 18px 14px", background: C.paper, border: `1px solid ${C.line}`, borderRadius: 16, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1416,6 +1475,64 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Kelgan savatni ochish */}
+      {openBasketId && (() => {
+        const ob = inbox.find((b) => b.id === openBasketId);
+        if (!ob) return null;
+        const total = ob.items.reduce((s, i) => s + (i.price != null ? Number(i.price) * (Number(i.qty) || 1) : 0), 0);
+        const left = ob.items.filter((i) => !i.bought).length;
+        return (
+          <div onClick={() => setOpenBasketId(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(42,38,32,.5)", zIndex: 55, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+            <div onClick={(e) => e.stopPropagation()}
+              style={{ width: "100%", maxWidth: 540, background: C.bg, borderRadius: "20px 20px 0 0", padding: "16px 16px calc(16px + env(safe-area-inset-bottom))", maxHeight: "88vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: C.gold, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                  <ShoppingBasket size={20} color="#fff" />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{basketTitle(ob)}</h2>
+                  <div style={{ fontSize: 12, color: C.sub, marginTop: 1 }}>{ob.items.length} ta mahsulot{left < ob.items.length ? ` · ${left} ta qoldi` : ""}</div>
+                </div>
+                <button onClick={() => setOpenBasketId(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: C.sub }}><X size={22} /></button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {ob.items.map((it) => (
+                  <div key={it.id} onClick={() => toggleBasketItem(ob.id, it.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 11, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 12, padding: "10px 12px", cursor: "pointer", opacity: it.bought ? 0.55 : 1 }}>
+                    <div style={{ width: 22, height: 22, borderRadius: 7, border: `2px solid ${it.bought ? C.green : C.line}`, background: it.bought ? C.green : "transparent", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                      {it.bought && <Check size={14} color="#fff" />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, textDecoration: it.bought ? "line-through" : "none" }}>
+                        {it.name}{it.variant ? ` (${it.variant})` : ""}
+                      </div>
+                      <div style={{ fontSize: 12, color: C.sub, marginTop: 1 }}>{som(it.qty)} {it.unit}{it.price != null ? ` · ${som(it.price * (Number(it.qty) || 1))} so‘m` : ""}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {total > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, padding: "10px 13px", background: C.paper, border: `1px solid ${C.line}`, borderRadius: 12 }}>
+                  <span style={{ fontSize: 13, color: C.sub, fontWeight: 600 }}>Taxminiy jami</span>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: C.pom }}>{som(total)} so‘m</span>
+                </div>
+              )}
+
+              <button onClick={() => deleteBasket(ob.id)}
+                style={{ marginTop: 13, width: "100%", border: "none", cursor: "pointer", borderRadius: 14, background: C.green, color: "#fff", fontFamily: FONT, fontWeight: 800, fontSize: 15.5, padding: "13px 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <Check size={18} /> Bozorlik tugadi — o‘chirish
+              </button>
+              <div style={{ fontSize: 11.5, color: C.sub, textAlign: "center", marginTop: 7 }}>
+                O‘chirsangiz, bu ro‘yxat yo‘qoladi. Sizning o‘z ro‘yxatingizga tegmaydi.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Kelgan ro'yxat bildirishnomasi */}
       {incoming && (

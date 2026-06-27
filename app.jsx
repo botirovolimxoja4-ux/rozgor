@@ -350,7 +350,7 @@ function todayLabel() {
   return `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
 }
 
-function App() {
+export default function App() {
   const [items, setItems] = useState([]);
   const [budget, setBudget] = useState("");
   const [planDate, setPlanDate] = useState("");
@@ -451,6 +451,9 @@ function App() {
   useEffect(() => { if (loaded && hasStore) window.storage.set(KEY_INBOX, JSON.stringify(inbox)).catch(() => {}); }, [inbox, loaded]);
   useEffect(() => { if (loaded && hasStore && me) window.storage.set(KEY_ME, JSON.stringify(me)).catch(() => {}); }, [me, loaded]);
 
+  // ── O'qilmagan kelgan ro'yxatlar soni ──
+  const unreadCount = inbox.filter((b) => !b.read).length;
+
   // ── O'qilmagan xabarlarni ilova ikonkasida ko'rsatish (telefon ekranida nuqta/raqam) ──
   useEffect(() => {
     try {
@@ -494,7 +497,6 @@ function App() {
 
   const toBuy = items.filter((i) => !i.bought);
   const bought = items.filter((i) => i.bought);
-  const unreadCount = inbox.filter((b) => !b.read).length;
   const totalRemaining = toBuy.reduce((s, i) => s + projLine(i), 0);
   const totalBought = bought.reduce((s, i) => s + projLine(i), 0);
   const totalAll = totalRemaining + totalBought;

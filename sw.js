@@ -1,34 +1,44 @@
-const CACHE = 'rozgor-v4';
+// Ro'zgor service worker — v5 (network-first: doim eng yangi versiya)
+const CACHE = 'rozgor-v5';
 const SHELL = ['./', './index.html', './app.jsx', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()).catch(() => {}));
+  self.skipWaiting();
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
 });
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
-  const u = req.url;
-  // Server funksiyalari va API ni HECH QACHON keshlamaymiz (sinxron uchun)
-  if (u.indexOf('/.netlify/functions/') !== -1 || u.indexOf('api.anthropic.com') !== -1) return;
-  e.respondWith(
-    caches.match(req).then((cached) =>
-      cached ||
-      fetch(req).then((res) => {
-        try { const cp = res.clone(); caches.open(CACHE).then((c) => c.put(req, cp)); } catch (_) {}
-        return res;
-      }).catch(() => caches.match('./index.html'))
-    )
-  );
+  const url = req.url;
+  // Server funksiyalari/API ni hech qachon keshlamaymiz
+  if (url.indexOf('/.netlify/functions/') !== -1 || url.indexOf('api.anthropic.com') !== -1) return;
+
+  const sameOrigin = url.indexOf(self.location.origin) === 0;
+
+  if (sameOrigin) {
+    // NETWORK-FIRST: doim yangi versiyani olishga harakat, internet yo'q bo'lsa keshdan
+    e.respondWith(
+      fetch(req)
+        .then((res) => { try { const cp = res.clone(); caches.open(CACHE).then((c) => c.put(req, cp)); } catch (_) {} return res; })
+        .catch(() => caches.match(req).then((c) => c || caches.match('./index.html')))
+    );
+  } else {
+    // CDN (React/Babel) — barqaror, keshdan tez
+    e.respondWith(
+      caches.match(req).then((cached) => cached || fetch(req).then((res) => { try { const cp = res.clone(); caches.open(CACHE).then((c) => c.put(req, cp)); } catch (_) {} return res; }))
+    );
+  }
 });
 
-// Bildirishnoma bosilganda ilovani ochish/fokuslash
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   e.waitUntil(
